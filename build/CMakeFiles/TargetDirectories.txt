@@ -1,3 +1,0 @@
-/home/roushelfy/laser/build/CMakeFiles/simulate.dir
-/home/roushelfy/laser/build/CMakeFiles/edit_cache.dir
-/home/roushelfy/laser/build/CMakeFiles/rebuild_cache.dir
