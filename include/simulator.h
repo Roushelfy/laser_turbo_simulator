@@ -6,6 +6,7 @@
 #include <vector>
 #include <Eigen/Dense>
 #include <set>
+#include <map>
 #include <cmath>
 
 struct pd
@@ -35,6 +36,7 @@ class Simulator
 {
 private:
     /* data */
+    std::map<std::string, std::string> config;
     double simulate_time;
     Eigen::Vector3d laser_orientation;
     Eigen::Vector3d tag_position;
@@ -66,7 +68,7 @@ private:
         pd_array;
 
 public:
-    Simulator(const std::string &configFilePath);
+    Simulator(const std::string &configFilePath, int argc, char *argv[]);
     ~Simulator();
     void set_laser_orientation();
     void set_galvo_voltage();

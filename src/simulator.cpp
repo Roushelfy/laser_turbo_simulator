@@ -1,11 +1,22 @@
 #include "simulator.h"
 #include <sstream>
 #include <random>
-Simulator::Simulator(const std::string &configFilePath) : simulate_time(0)
+Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) : simulate_time(0)
 {
     // read params from config file
     std::ifstream configFile(configFilePath);
     std::string line;
+    for (int i = 1; i < argc; ++i)
+    {
+        std::string arg = argv[i];
+        if (arg.substr(0, 1) == "-")
+        {
+            auto delimiterPos = arg.find('=');
+            auto key = arg.substr(1, delimiterPos - 1);
+            auto value = arg.substr(delimiterPos + 1);
+            config[key] = value;
+        }
+    }
     while (std::getline(configFile, line))
     {
         std::istringstream iss(line);
@@ -76,6 +87,69 @@ Simulator::Simulator(const std::string &configFilePath) : simulate_time(0)
                 std::cout << "Key not supported!" << std::endl;
         }
     }
+    for (auto &pair : config)
+    {
+        if (pair.first == "time_step")
+            time_step = std::stod(pair.second);
+        else if (pair.first == "adc_frequency")
+            adc_frequency = std::stod(pair.second);
+        else if (pair.first == "galvo_delay")
+            galvo_delay = std::stod(pair.second);
+        else if (pair.first == "waist_radius")
+            waist_radius = std::stod(pair.second);
+        else if (pair.first == "wavelength")
+            wavelength = std::stod(pair.second);
+        else if (pair.first == "central_intensity")
+            central_intensity = std::stod(pair.second);
+        else if (pair.first == "object_speed")
+            object_speed = std::stod(pair.second);
+        else if (pair.first == "object_moving_radius")
+            object_moving_radius = std::stod(pair.second);
+        else if (pair.first == "object_distance")
+            object_distance = std::stod(pair.second);
+        else if (pair.first == "pd_number")
+            pd_number = std::stod(pair.second);
+        else if (pair.first == "pd_radius")
+            pd_radius = std::stod(pair.second);
+        else if (pair.first == "laser_position_x")
+            laser_position(0) = std::stod(pair.second);
+        else if (pair.first == "laser_position_y")
+            laser_position(1) = std::stod(pair.second);
+        else if (pair.first == "laser_position_z")
+            laser_position(2) = std::stod(pair.second);
+        else if (pair.first == "noise_stddev")
+            noise_stddev = std::stod(pair.second);
+        else if (pair.first == "background_intensity")
+            background_intensity = std::stod(pair.second);
+        else if (pair.first == "fov")
+            fov = std::stod(pair.second);
+        else if (pair.first == "max_n_number")
+            max_n_number = std::stoi(pair.second);
+        else if (pair.first == "long_time")
+        {
+            if (pair.second == "true")
+                long_time = true;
+            else
+                long_time = false;
+        }
+        else if (pair.first == "tracking_method")
+        {
+            if (pair.second == "one_max_value")
+                method = tracking_method::one_max_value;
+            else if (pair.second == "three_max_value")
+                method = tracking_method::n_max_value;
+            else if (pair.second == "fitting_glass")
+                method = tracking_method::fitting_galss;
+            else
+                std::cout << "Tracking method not supported!" << std::endl;
+        }
+        else if (pair.first == "object_radius")
+        {
+            object_radius = std::stod(pair.second);
+        }
+        else
+            std::cout << "Key not supported!" << std::endl;
+    }
     adc_time_step = 1.0 / adc_frequency;
     record = Record();
     object_angular_speed = object_speed / object_moving_radius;
@@ -111,6 +185,28 @@ Simulator::Simulator(const std::string &configFilePath) : simulate_time(0)
     std::cout << "PD number: " << pd_number << std::endl;
     std::cout << "PD radius: " << pd_radius << std::endl;
     std::cout << "Laser position: " << laser_position.transpose() << std::endl;
+    std::cout << "Noise stddev: " << noise_stddev << std::endl;
+    std::cout << "Background intensity: " << background_intensity << std::endl;
+    std::cout << "FOV: " << fov << std::endl;
+    std::cout << "Max n number: " << max_n_number << std::endl;
+    std::cout << "Long time: " << long_time << std::endl;
+    std::cout << "Tracking method: ";
+    switch (method)
+    {
+    case tracking_method::one_max_value:
+        std::cout << "one_max_value" << std::endl;
+        break;
+    case tracking_method::n_max_value:
+        std::cout << "n_max_value" << std::endl;
+        break;
+    case tracking_method::fitting_galss:
+        std::cout << "fitting_glass" << std::endl;
+        break;
+    default:
+        break;
+    }
+    std::cout << "Object radius: " << object_radius << std::endl;
+    std::cout << std::endl;
 }
 Simulator::~Simulator()
 {
