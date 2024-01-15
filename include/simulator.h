@@ -19,6 +19,7 @@ enum class tracking_method
 {
     one_max_value,
     n_max_value,
+    move_in_four,
     fitting_galss,
 };
 struct Record
@@ -41,8 +42,8 @@ private:
     Eigen::Vector3d laser_orientation;
     Eigen::Vector3d tag_position;
     Eigen::Vector3d laser_position;
-    uint16_t galvo_voltage_x;
-    uint16_t galvo_voltage_y;
+    uint32_t galvo_voltage_x;
+    uint32_t galvo_voltage_y;
     tracking_method method;
     double time_step;
     double fov;
@@ -61,6 +62,7 @@ private:
     double noise_stddev;
     double background_intensity;
     double object_radius;
+    uint32_t dac_resolution;
     Record record;
     bool long_time;
     int max_n_number;

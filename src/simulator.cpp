@@ -61,6 +61,8 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
                 fov = std::stod(value);
             else if (key == "max_n_number")
                 max_n_number = std::stoi(value);
+            else if (key == "dac_resolution")
+                dac_resolution = std::stoi(value);
             else if (key == "long_time")
             {
                 if (value == "true")
@@ -72,8 +74,10 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
             {
                 if (value == "one_max_value")
                     method = tracking_method::one_max_value;
-                else if (value == "three_max_value")
+                else if (value == "n_max_value")
                     method = tracking_method::n_max_value;
+                else if (value == "move_in_four")
+                    method = tracking_method::move_in_four;
                 else if (value == "fitting_glass")
                     method = tracking_method::fitting_galss;
                 else
@@ -125,6 +129,8 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
             fov = std::stod(pair.second);
         else if (pair.first == "max_n_number")
             max_n_number = std::stoi(pair.second);
+        else if (pair.first == "dac_resolution")
+            dac_resolution = std::stoi(pair.second);
         else if (pair.first == "long_time")
         {
             if (pair.second == "true")
@@ -136,8 +142,10 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
         {
             if (pair.second == "one_max_value")
                 method = tracking_method::one_max_value;
-            else if (pair.second == "three_max_value")
+            else if (pair.second == "n_max_value")
                 method = tracking_method::n_max_value;
+            else if (pair.second == "move_in_four")
+                method = tracking_method::move_in_four;
             else if (pair.second == "fitting_glass")
                 method = tracking_method::fitting_galss;
             else
@@ -158,6 +166,7 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
     laser_orientation = (tag_position - laser_position).normalized();
     // set voltage based on orientation
     set_galvo_voltage();
+    std::cout << "galvo_voltage:" << galvo_voltage_x << " " << galvo_voltage_y << std::endl;
     std::cout
         << "laser_orientation" << laser_orientation.transpose() << std::endl;
     std::cout << "tag_position" << tag_position.transpose() << std::endl;
@@ -189,6 +198,7 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
     std::cout << "Background intensity: " << background_intensity << std::endl;
     std::cout << "FOV: " << fov << std::endl;
     std::cout << "Max n number: " << max_n_number << std::endl;
+    std::cout << "DAC resolution: " << dac_resolution << std::endl;
     std::cout << "Long time: " << long_time << std::endl;
     std::cout << "Tracking method: ";
     switch (method)
@@ -198,6 +208,9 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
         break;
     case tracking_method::n_max_value:
         std::cout << "n_max_value" << std::endl;
+        break;
+    case tracking_method::move_in_four:
+        std::cout << "move_in_four" << std::endl;
         break;
     case tracking_method::fitting_galss:
         std::cout << "fitting_glass" << std::endl;
@@ -222,13 +235,13 @@ void Simulator::run()
         adjust_laser_orientation();
 
         // report every second
-        if (std::fmod(simulate_time, 1) < 1e-5 && simulate_time > 1)
+        if (std::fmod(simulate_time, 1) < adc_time_step * (pd_number) && simulate_time > 1)
         {
             std::cout << "Time: " << simulate_time << "s" << std::endl;
             std::cout << "Laser orientation: " << laser_orientation.transpose() << std::endl;
             std::cout << "Tag position: " << tag_position.transpose() << std::endl;
             std::cout << std::endl;
-            if (!long_time)
+            if (!long_time && simulate_time * object_angular_speed > 2 * M_PI)
             {
                 std::cout << "Tracking success!" << std::endl;
                 // save record
@@ -266,7 +279,6 @@ void Simulator::run()
                     recordFile << min_intensity + intensity_interval * i << ":" << intensity_count[i] << std::endl;
                 }
                 recordFile.close();
-                // 绘制分布曲线
                 break;
             }
         }
@@ -312,12 +324,12 @@ double Simulator::gaussianBeamIntensity(const Eigen::Vector3d &dest,
     return intensity;
 }
 
-// based on galvo voltage(0-4095) ->(-fov~+fov)
+// based on galvo voltage(0-dac_resolution) ->(-fov~+fov)
 // voltage applied based on z-axis
 void Simulator::set_laser_orientation()
 {
-    double x = (galvo_voltage_x - 2048) / 2048.0 * fov;
-    double y = (galvo_voltage_y - 2048) / 2048.0 * fov;
+    double x = ((double)galvo_voltage_x - dac_resolution / 2) / (dac_resolution / 2) * fov;
+    double y = ((double)galvo_voltage_y - dac_resolution / 2) / (dac_resolution / 2) * fov;
     laser_orientation(0) = std::sin(x) * std::cos(y);
     laser_orientation(1) = std::sin(y);
     laser_orientation(2) = std::cos(x) * std::cos(y);
@@ -325,8 +337,8 @@ void Simulator::set_laser_orientation()
 
 void Simulator::set_galvo_voltage()
 {
-    galvo_voltage_x = (laser_orientation(0) / fov) * 2048 + 2048;
-    galvo_voltage_y = laser_orientation(1) / fov * 2048 + 2048;
+    galvo_voltage_x = (laser_orientation(0) / fov) * dac_resolution / 2 + dac_resolution / 2;
+    galvo_voltage_y = (laser_orientation(1) / fov) * dac_resolution / 2 + dac_resolution / 2;
 }
 void Simulator::adjust_laser_orientation()
 {
@@ -367,23 +379,41 @@ void Simulator::adjust_laser_orientation()
             y += temporate_pd[i].position(1) * temporate_pd[i].value;
         }
         double normalizer = std::min(abs(x), abs(y));
-        if (normalizer == 0)
+        if (normalizer < 1e-4)
             normalizer = std::max(abs(x), abs(y));
         assert(normalizer != 0);
         galvo_voltage_x += x / normalizer;
         galvo_voltage_y += y / normalizer;
         break;
     }
+    case tracking_method::move_in_four:
+    {
+        int max_index = 0;
+        for (int i = 0; i < pd_number; i++)
+        {
+            if (pd_array[i].value > pd_array[max_index].value)
+                max_index = i;
+        }
+        if (abs(pd_array[max_index].position(0)) > abs(pd_array[max_index].position(1)))
+        {
+            galvo_voltage_x += pd_array[max_index].position(0) / abs(pd_array[max_index].position(0));
+        }
+        else
+        {
+            galvo_voltage_y += pd_array[max_index].position(1) / abs(pd_array[max_index].position(1));
+        }
+        break;
+    }
     case tracking_method::fitting_galss:
     default:
         break;
     }
-    if (galvo_voltage_x > 4095)
-        galvo_voltage_x = 4095;
+    if (galvo_voltage_x > dac_resolution)
+        galvo_voltage_x = dac_resolution;
     if (galvo_voltage_x < 0)
         galvo_voltage_x = 0;
-    if (galvo_voltage_y > 4095)
-        galvo_voltage_y = 4095;
+    if (galvo_voltage_y > dac_resolution)
+        galvo_voltage_y = dac_resolution;
     if (galvo_voltage_y < 0)
         galvo_voltage_y = 0;
     set_laser_orientation();
