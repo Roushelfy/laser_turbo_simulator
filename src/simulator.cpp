@@ -50,6 +50,13 @@ Simulator::Simulator(const std::string &configFilePath) : simulate_time(0)
                 fov = std::stod(value);
             else if (key == "max_n_number")
                 max_n_number = std::stoi(value);
+            else if (key == "long_time")
+            {
+                if (value == "true")
+                    long_time = true;
+                else
+                    long_time = false;
+            }
             else if (key == "tracking_method")
             {
                 if (value == "one_max_value")
@@ -70,6 +77,7 @@ Simulator::Simulator(const std::string &configFilePath) : simulate_time(0)
         }
     }
     adc_time_step = 1.0 / adc_frequency;
+    record = Record();
     object_angular_speed = object_speed / object_moving_radius;
     // set laser to point to tag
     update_tag_position(0);
@@ -118,21 +126,57 @@ void Simulator::run()
         adjust_laser_orientation();
 
         // report every second
-        if (std::fmod(simulate_time, 1) < 1e-5)
+        if (std::fmod(simulate_time, 1) < 1e-5 && simulate_time > 1)
         {
             std::cout << "Time: " << simulate_time << "s" << std::endl;
             std::cout << "Laser orientation: " << laser_orientation.transpose() << std::endl;
             std::cout << "Tag position: " << tag_position.transpose() << std::endl;
-            std::cout << "PD value: " << std::endl;
-            for (int i = 0; i < pd_number; i++)
-            {
-                std::cout << pd_array[i].value << " ";
-            }
             std::cout << std::endl;
+            if (!long_time)
+            {
+                std::cout << "Tracking success!" << std::endl;
+                // save record
+                std::ofstream recordFile("../data/record.txt");
+                recordFile << "average_distance:" << record.average_distance << std::endl;
+                recordFile << "average_intensity:" << record.average_intensity << std::endl;
+                recordFile << "record_number:" << record.record_number << std::endl;
+                recordFile << "laser_distance:" << std::endl;
+                // 从最大值，最小值之间划分20个区间，统计次数
+                double max_dis = *record.laser_distance.rbegin();
+                double min_dis = *record.laser_distance.begin();
+                double interval = (max_dis - min_dis) / 20;
+                std::vector<int> count(20, 0);
+                for (auto &dis : record.laser_distance)
+                {
+                    int index = (dis - min_dis) / interval;
+                    count[index]++;
+                }
+                for (int i = 0; i < 20; i++)
+                {
+                    recordFile << min_dis + interval * i << ":" << count[i] << std::endl;
+                }
+                recordFile << "tag_intensity:" << std::endl;
+                double max_intensity = *record.tag_intensity.rbegin();
+                double min_intensity = *record.tag_intensity.begin();
+                double intensity_interval = (max_intensity - min_intensity) / 20;
+                std::vector<int> intensity_count(20, 0);
+                for (auto &intensity : record.tag_intensity)
+                {
+                    int index = (intensity - min_intensity) / intensity_interval;
+                    intensity_count[index]++;
+                }
+                for (int i = 0; i < 20; i++)
+                {
+                    recordFile << min_intensity + intensity_interval * i << ":" << intensity_count[i] << std::endl;
+                }
+                recordFile.close();
+                // 绘制分布曲线
+                break;
+            }
         }
         if (connection_lost())
         {
-            std::cout << "Connection lost at" << simulate_time << "seconds" << std::endl;
+            std::cout << "Connection lost at: " << simulate_time << " seconds" << std::endl;
             std::cout << "laser orientation" << laser_orientation.transpose() << std::endl;
             std::cout << "tag position" << tag_position.transpose() << std::endl;
             break;
@@ -275,6 +319,15 @@ double Simulator::noise(double stddev)
 bool Simulator::connection_lost()
 {
     double dis = distanceToLine(tag_position, laser_position, laser_orientation);
+    double intensity = gaussianBeamIntensity(tag_position, laser_position, laser_orientation);
+    // record
+    record.record_number++;
+    record.laser_distance.insert(dis);
+    record.sum_distance += dis;
+    record.average_distance = record.sum_distance / record.record_number;
+    record.tag_intensity.insert(intensity);
+    record.sum_intensity += intensity;
+    record.average_intensity = record.sum_intensity / record.record_number;
     if (dis > object_radius)
     {
         std::cout << "Connection lost! dis:" << dis << std::endl;

@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <Eigen/Dense>
+#include <set>
 #include <cmath>
 
 struct pd
@@ -18,6 +19,17 @@ enum class tracking_method
     one_max_value,
     n_max_value,
     fitting_galss,
+};
+struct Record
+{
+    std::set<double> laser_distance;
+    double sum_distance;
+    double average_distance;
+    std::set<double> tag_intensity;
+    double sum_intensity;
+    double average_intensity;
+    uint64_t record_number;
+    Record() : average_distance(0), average_intensity(0), record_number(0), sum_distance(0), sum_intensity(0) {}
 };
 class Simulator
 {
@@ -47,6 +59,8 @@ private:
     double noise_stddev;
     double background_intensity;
     double object_radius;
+    Record record;
+    bool long_time;
     int max_n_number;
     std::vector<pd>
         pd_array;
