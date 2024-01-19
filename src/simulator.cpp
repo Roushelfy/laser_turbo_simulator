@@ -1,7 +1,7 @@
 #include "simulator.h"
 #include <sstream>
 #include <random>
-Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) : simulate_time(0)
+Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) : simulate_time(0), pwm()
 {
     // read params from config file
     std::ifstream configFile(configFilePath);
@@ -33,6 +33,8 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
                 galvo_delay = std::stod(value);
             else if (key == "waist_radius")
                 waist_radius = std::stod(value);
+            else if (key == "waist_distance")
+                waist_distance = std::stod(value);
             else if (key == "wavelength")
                 wavelength = std::stod(value);
             else if (key == "central_intensity")
@@ -57,18 +59,29 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
                 noise_stddev = std::stod(value);
             else if (key == "background_intensity")
                 background_intensity = std::stod(value);
+            else if (key == "galvo_angular_speed")
+                galvo_angular_speed = std::stod(value);
             else if (key == "fov")
                 fov = std::stod(value);
             else if (key == "max_n_number")
                 max_n_number = std::stoi(value);
             else if (key == "dac_resolution")
                 dac_resolution = std::stoi(value);
+            else if (key == "pwm_precision")
+                pwm.precision = std::stod(value);
             else if (key == "long_time")
             {
                 if (value == "true")
                     long_time = true;
                 else
                     long_time = false;
+            }
+            else if (key == "debug")
+            {
+                if (value == "true")
+                    debug = true;
+                else
+                    debug = false;
             }
             else if (key == "tracking_method")
             {
@@ -88,7 +101,7 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
                 object_radius = std::stod(value);
             }
             else
-                std::cout << "Key not supported!" << std::endl;
+                std::cout << "Key not supported!" << key << std::endl;
         }
     }
     for (auto &pair : config)
@@ -101,6 +114,8 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
             galvo_delay = std::stod(pair.second);
         else if (pair.first == "waist_radius")
             waist_radius = std::stod(pair.second);
+        else if (pair.first == "waist_distance")
+            waist_distance = std::stod(pair.second);
         else if (pair.first == "wavelength")
             wavelength = std::stod(pair.second);
         else if (pair.first == "central_intensity")
@@ -111,6 +126,8 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
             object_moving_radius = std::stod(pair.second);
         else if (pair.first == "object_distance")
             object_distance = std::stod(pair.second);
+        else if (pair.first == "pwm_precision")
+            pwm.precision = std::stod(pair.second);
         else if (pair.first == "pd_number")
             pd_number = std::stod(pair.second);
         else if (pair.first == "pd_radius")
@@ -131,12 +148,21 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
             max_n_number = std::stoi(pair.second);
         else if (pair.first == "dac_resolution")
             dac_resolution = std::stoi(pair.second);
+        else if (pair.first == "galvo_angular_speed")
+            galvo_angular_speed = std::stod(pair.second);
         else if (pair.first == "long_time")
         {
             if (pair.second == "true")
                 long_time = true;
             else
                 long_time = false;
+        }
+        else if (pair.first == "debug")
+        {
+            if (pair.second == "true")
+                debug = true;
+            else
+                debug = false;
         }
         else if (pair.first == "tracking_method")
         {
@@ -161,16 +187,18 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
     adc_time_step = 1.0 / adc_frequency;
     record = Record();
     object_angular_speed = object_speed / object_moving_radius;
+    pwm.len = 1 / pwm.precision;
     // set laser to point to tag
     update_tag_position(0);
-    laser_orientation = (tag_position - laser_position).normalized();
+    laser.last_orientation = laser.target_orientation = (tag_position - laser_position).normalized();
+    laser.last_time = laser.next_time = simulate_time;
     // set voltage based on orientation
     set_galvo_voltage();
-    std::cout << "galvo_voltage:" << galvo_voltage_x << " " << galvo_voltage_y << std::endl;
+    std::cout << "galvo_voltage:" << laser.galvo_voltage_x << " " << laser.galvo_voltage_y << std::endl;
     std::cout
-        << "laser_orientation" << laser_orientation.transpose() << std::endl;
+        << "laser_orientation" << get_laser_orientation() << std::endl;
     std::cout << "tag_position" << tag_position.transpose() << std::endl;
-    std::cout << "init dis" << distanceToLine(tag_position, laser_position, laser_orientation) << std::endl;
+    std::cout << "init dis" << distanceToLine(tag_position, laser_position, get_laser_orientation()) << std::endl;
     for (int i = 0; i < pd_number; i++)
     {
         pd pd_temp;
@@ -185,6 +213,7 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
     std::cout << "ADC time step: " << adc_time_step << std::endl;
     std::cout << "Galvo delay: " << galvo_delay << std::endl;
     std::cout << "Waist radius: " << waist_radius << std::endl;
+    std::cout << "Waist distance: " << waist_distance << std::endl;
     std::cout << "Wavelength: " << wavelength << std::endl;
     std::cout << "Central intensity: " << central_intensity << std::endl;
     std::cout << "Object speed: " << object_speed << std::endl;
@@ -198,6 +227,7 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
     std::cout << "Background intensity: " << background_intensity << std::endl;
     std::cout << "FOV: " << fov << std::endl;
     std::cout << "Max n number: " << max_n_number << std::endl;
+    std::cout << "Galvo angular speed: " << galvo_angular_speed << std::endl;
     std::cout << "DAC resolution: " << dac_resolution << std::endl;
     std::cout << "Long time: " << long_time << std::endl;
     std::cout << "Tracking method: ";
@@ -238,7 +268,7 @@ void Simulator::run()
         if (std::fmod(simulate_time, 1) < adc_time_step * (pd_number) && simulate_time > 1)
         {
             std::cout << "Time: " << simulate_time << "s" << std::endl;
-            std::cout << "Laser orientation: " << laser_orientation.transpose() << std::endl;
+            std::cout << "Laser orientation: " << get_laser_orientation().transpose() << std::endl;
             std::cout << "Tag position: " << tag_position.transpose() << std::endl;
             std::cout << std::endl;
             if (!long_time && simulate_time * object_angular_speed > 2 * M_PI)
@@ -253,28 +283,29 @@ void Simulator::run()
                 // 从最大值，最小值之间划分20个区间，统计次数
                 double max_dis = *record.laser_distance.rbegin();
                 double min_dis = *record.laser_distance.begin();
-                double interval = (max_dis - min_dis) / 20;
-                std::vector<int> count(20, 0);
+                int plot_num = 100;
+                double interval = (max_dis - min_dis) / plot_num;
+                std::vector<int> count(plot_num, 0);
                 for (auto &dis : record.laser_distance)
                 {
                     int index = (dis - min_dis) / interval;
                     count[index]++;
                 }
-                for (int i = 0; i < 20; i++)
+                for (int i = 0; i < plot_num; i++)
                 {
                     recordFile << min_dis + interval * i << ":" << count[i] << std::endl;
                 }
                 recordFile << "tag_intensity:" << std::endl;
                 double max_intensity = *record.tag_intensity.rbegin();
                 double min_intensity = *record.tag_intensity.begin();
-                double intensity_interval = (max_intensity - min_intensity) / 20;
-                std::vector<int> intensity_count(20, 0);
+                double intensity_interval = (max_intensity - min_intensity) / plot_num;
+                std::vector<int> intensity_count(plot_num, 0);
                 for (auto &intensity : record.tag_intensity)
                 {
                     int index = (intensity - min_intensity) / intensity_interval;
                     intensity_count[index]++;
                 }
-                for (int i = 0; i < 20; i++)
+                for (int i = 0; i < plot_num; i++)
                 {
                     recordFile << min_intensity + intensity_interval * i << ":" << intensity_count[i] << std::endl;
                 }
@@ -285,7 +316,7 @@ void Simulator::run()
         if (connection_lost())
         {
             std::cout << "Connection lost at: " << simulate_time << " seconds" << std::endl;
-            std::cout << "laser orientation" << laser_orientation.transpose() << std::endl;
+            std::cout << "laser orientation" << get_laser_orientation().transpose() << std::endl;
             std::cout << "tag position" << tag_position.transpose() << std::endl;
             break;
         }
@@ -319,7 +350,7 @@ double Simulator::gaussianBeamIntensity(const Eigen::Vector3d &dest,
 {
     double distance = (dest - start).norm();
     double r = distanceToLine(dest, start, orientation);
-    double w = waist_radius * std::sqrt(1 + std::pow(distance / (M_PI * std::pow(waist_radius, 2) / wavelength), 2));
+    double w = waist_radius * std::sqrt(1 + std::pow((distance - waist_distance) / (M_PI * std::pow(waist_radius, 2) / wavelength), 2));
     double intensity = std::exp(-2 * std::pow(r, 2) / std::pow(w, 2)) * central_intensity;
     return intensity;
 }
@@ -328,21 +359,33 @@ double Simulator::gaussianBeamIntensity(const Eigen::Vector3d &dest,
 // voltage applied based on z-axis
 void Simulator::set_laser_orientation()
 {
-    double x = ((double)galvo_voltage_x - dac_resolution / 2) / (dac_resolution / 2) * fov;
-    double y = ((double)galvo_voltage_y - dac_resolution / 2) / (dac_resolution / 2) * fov;
-    laser_orientation(0) = std::sin(x) * std::cos(y);
-    laser_orientation(1) = std::sin(y);
-    laser_orientation(2) = std::cos(x) * std::cos(y);
+    double x = ((double)laser.galvo_voltage_x - dac_resolution / 2) / (dac_resolution / 2) * fov;
+    double y = ((double)laser.galvo_voltage_y - dac_resolution / 2) / (dac_resolution / 2) * fov;
+    laser.last_orientation = get_laser_orientation();
+    laser.target_orientation(0) = std::sin(x) * std::cos(y);
+    laser.target_orientation(1) = std::sin(y);
+    laser.target_orientation(2) = std::cos(x) * std::cos(y);
+    laser.last_time = simulate_time + galvo_delay;
+    double time = std::max(abs(laser.target_orientation(0) - laser.last_orientation(0)), abs(laser.target_orientation(1) - laser.last_orientation(1))) / galvo_angular_speed;
+    laser.next_time = simulate_time + galvo_delay + time;
+    if (debug)
+    {
+        std::cout << "laser.last_orientation:" << laser.last_orientation.transpose() << std::endl;
+        std::cout << "laser.target_orientation:" << laser.target_orientation.transpose() << std::endl;
+        std::cout << "laser.last_time:" << laser.last_time << std::endl;
+        std::cout << "laser.next_time:" << laser.next_time << std::endl;
+    }
 }
 
 void Simulator::set_galvo_voltage()
 {
-    galvo_voltage_x = (laser_orientation(0) / fov) * dac_resolution / 2 + dac_resolution / 2;
-    galvo_voltage_y = (laser_orientation(1) / fov) * dac_resolution / 2 + dac_resolution / 2;
+    laser.galvo_avg_voltage_x = (laser.target_orientation(0) / fov) * dac_resolution / 2 + dac_resolution / 2;
+    laser.galvo_avg_voltage_y = (laser.target_orientation(1) / fov) * dac_resolution / 2 + dac_resolution / 2;
+    laser.galvo_voltage_x = round(laser.galvo_avg_voltage_x);
+    laser.galvo_voltage_y = round(laser.galvo_avg_voltage_y);
 }
 void Simulator::adjust_laser_orientation()
 {
-    update_tag_position(galvo_delay);
     switch (method)
     {
     case tracking_method::one_max_value:
@@ -358,8 +401,8 @@ void Simulator::adjust_laser_orientation()
         if (small_edge < 1e-4)
             small_edge = std::max(abs(pd_array[max_index].position(0)), abs(pd_array[max_index].position(1)));
         assert(small_edge != 0);
-        galvo_voltage_x += pd_array[max_index].position(0) / small_edge;
-        galvo_voltage_y += pd_array[max_index].position(1) / small_edge;
+        laser.galvo_voltage_x += pd_array[max_index].position(0) / small_edge;
+        laser.galvo_voltage_y += pd_array[max_index].position(1) / small_edge;
         break;
     }
     case tracking_method::n_max_value:
@@ -382,8 +425,8 @@ void Simulator::adjust_laser_orientation()
         if (normalizer < 1e-4)
             normalizer = std::max(abs(x), abs(y));
         assert(normalizer != 0);
-        galvo_voltage_x += x / normalizer;
-        galvo_voltage_y += y / normalizer;
+        laser.galvo_voltage_x += x / normalizer;
+        laser.galvo_voltage_y += y / normalizer;
         break;
     }
     case tracking_method::move_in_four:
@@ -394,13 +437,23 @@ void Simulator::adjust_laser_orientation()
             if (pd_array[i].value > pd_array[max_index].value)
                 max_index = i;
         }
+        if (debug == true)
+        {
+            std::cout << "max_index:" << max_index << std::endl;
+            std::cout << pd_array[max_index].position(0) << " " << pd_array[max_index].position(1) << std::endl;
+        }
         if (abs(pd_array[max_index].position(0)) > abs(pd_array[max_index].position(1)))
         {
-            galvo_voltage_x += pd_array[max_index].position(0) / abs(pd_array[max_index].position(0));
+            laser.galvo_avg_voltage_x += pd_array[max_index].position(0) / abs(pd_array[max_index].position(0)) * pwm.precision;
         }
         else
         {
-            galvo_voltage_y += pd_array[max_index].position(1) / abs(pd_array[max_index].position(1));
+            laser.galvo_avg_voltage_y += pd_array[max_index].position(1) / abs(pd_array[max_index].position(1)) * pwm.precision;
+        }
+        if (debug == true)
+        {
+            std::cout << "galvo_avg_voltage_x:" << laser.galvo_avg_voltage_x << std::endl;
+            std::cout << "galvo_avg_voltage_y:" << laser.galvo_avg_voltage_y << std::endl;
         }
         break;
     }
@@ -408,14 +461,16 @@ void Simulator::adjust_laser_orientation()
     default:
         break;
     }
-    if (galvo_voltage_x > dac_resolution)
-        galvo_voltage_x = dac_resolution;
-    if (galvo_voltage_x < 0)
-        galvo_voltage_x = 0;
-    if (galvo_voltage_y > dac_resolution)
-        galvo_voltage_y = dac_resolution;
-    if (galvo_voltage_y < 0)
-        galvo_voltage_y = 0;
+    manage_pwm_queue();
+    // limit voltage
+    if (laser.galvo_voltage_x > dac_resolution)
+        laser.galvo_voltage_x = dac_resolution;
+    if (laser.galvo_voltage_x < 0)
+        laser.galvo_voltage_x = 0;
+    if (laser.galvo_voltage_y > dac_resolution)
+        laser.galvo_voltage_y = dac_resolution;
+    if (laser.galvo_voltage_y < 0)
+        laser.galvo_voltage_y = 0;
     set_laser_orientation();
 }
 
@@ -425,13 +480,22 @@ void Simulator::sample_pd()
     {
         update_tag_position(adc_time_step);
         Eigen::Vector3d new_laser_start = (2 * tag_position - laser_position) * 0.5;
-        Eigen::Vector3d new_laser_orientation = laser_orientation * -1;
+        Eigen::Vector3d new_laser_orientation = get_laser_orientation() * -1;
         double intensity1 = background_intensity + gaussianBeamIntensity(pd_array[i].position, new_laser_start, new_laser_orientation);
         intensity1 += noise(noise_stddev);
-        pd_array[i].value = intensity1 * 65535 > 65535 ? 65535 : intensity1 * 65535;
+        pd_array[i].value = std::max(intensity1 * 65535 > 65535 ? 65535 : intensity1 * 65535, (double)0);
         double intensity2 = background_intensity + gaussianBeamIntensity(pd_array[i + pd_number / 2].position, new_laser_start, new_laser_orientation);
         intensity2 += noise(noise_stddev);
-        pd_array[i + pd_number / 2].value = intensity2 * 65535 > 65535 ? 65535 : intensity2 * 65535;
+        pd_array[i + pd_number / 2].value = std::max(intensity2 * 65535 > 65535 ? 65535 : intensity2 * 65535, (double)0);
+    }
+    // debug pd
+    if (debug == true)
+    {
+        for (int i = 0; i < pd_number; i++)
+        {
+            std::cout << pd_array[i].value << " ";
+        }
+        std ::cout << std::endl;
     }
 }
 
@@ -441,11 +505,31 @@ double Simulator::noise(double stddev)
     std::normal_distribution<double> dist(0, stddev);
     return dist(generator);
 }
-
+Eigen::Vector3d Simulator::get_laser_orientation()
+{
+    Eigen::Vector3d res;
+    if (simulate_time >= laser.next_time)
+    {
+        res = laser.target_orientation;
+    }
+    else if (simulate_time <= laser.last_time)
+    {
+        res = laser.last_orientation;
+    }
+    else
+    {
+        double time = simulate_time - laser.last_time;
+        double ratio = time / (laser.next_time - laser.last_time);
+        res = laser.last_orientation + (laser.target_orientation - laser.last_orientation) * ratio;
+    }
+    if (debug == true)
+        std::cout << "laser_orientation:" << res.transpose() << std::endl;
+    return res;
+}
 bool Simulator::connection_lost()
 {
-    double dis = distanceToLine(tag_position, laser_position, laser_orientation);
-    double intensity = gaussianBeamIntensity(tag_position, laser_position, laser_orientation);
+    double dis = distanceToLine(tag_position, laser_position, get_laser_orientation());
+    double intensity = gaussianBeamIntensity(tag_position, laser_position, get_laser_orientation());
     // record
     record.record_number++;
     record.laser_distance.insert(dis);
@@ -458,8 +542,90 @@ bool Simulator::connection_lost()
     {
         std::cout << "Connection lost! dis:" << dis << std::endl;
         std::cout << "object position:" << tag_position.transpose() << std::endl;
+        std::cout << "laser pointing at" << get_laser_orientation().transpose() * object_distance << std::endl;
         return true;
     }
     else
         return false;
+}
+
+Eigen::Vector2d Simulator::find_center()
+{
+    using Eigen::MatrixXd;
+    using Eigen::VectorXd;
+
+    // Define matrix A
+    MatrixXd A(pd_number, 5);
+    for (int i = 0; i < pd_number; ++i)
+    {
+        A(i, 0) = pd_array[i].position(0) * pd_array[i].position(0);
+        A(i, 1) = pd_array[i].position(1) * pd_array[i].position(1);
+        A(i, 2) = pd_array[i].position(0);
+        A(i, 3) = pd_array[i].position(1);
+        A(i, 4) = 1.0;
+    }
+
+    // Compute transpose of A and A' * A
+    MatrixXd At = A.transpose();
+    MatrixXd AtA = At * A;
+
+    // Prepare vector zfitVec
+    VectorXd zfitVec(pd_number);
+    for (int i = 0; i < pd_number; ++i)
+    {
+        zfitVec(i) = log(pd_array[i].value);
+    }
+
+    // Calculate A' * zfitVec
+    VectorXd Atzfit = At * zfitVec;
+
+    // Solve the linear system (AtA) * aa = Atzfit
+    VectorXd aa = AtA.ldlt().solve(Atzfit);
+
+    // Calculate x0 and y0
+    double x0 = -aa(2) / (2 * aa(0));
+    double y0 = -aa(3) / (2 * aa(1));
+
+    // Print the center
+    std::cout << "Center: (" << x0 << ", " << y0 << ")" << std::endl;
+
+    return Eigen::Vector2d(x0, y0);
+}
+
+void Simulator::manage_pwm_queue()
+{
+    std::pair<uint32_t, uint32_t> pwm_pair = {floor(laser.galvo_avg_voltage_x), floor(laser.galvo_avg_voltage_y)};
+    if (debug == true)
+        std::cout << "pwm_pair:" << pwm_pair.first << " " << pwm_pair.second << std::endl;
+    if (pwm.average.first < laser.galvo_avg_voltage_x)
+        pwm_pair.first++;
+    if (pwm.average.second < laser.galvo_avg_voltage_y)
+        pwm_pair.second++;
+    pwm.queue.push(pwm_pair);
+    pwm.sum.first += pwm_pair.first;
+    pwm.sum.second += pwm_pair.second;
+    if (pwm.queue.size() > pwm.len)
+    {
+        pwm.sum.first -= pwm.queue.front().first;
+        pwm.sum.second -= pwm.queue.front().second;
+        pwm.queue.pop();
+    }
+    pwm.average.first = (double)pwm.sum.first / pwm.queue.size();
+    pwm.average.second = (double)pwm.sum.second / pwm.queue.size();
+    laser.galvo_voltage_x = pwm_pair.first;
+    laser.galvo_voltage_y = pwm_pair.second;
+    // debug queue
+    if (debug == true)
+    {
+        std::cout
+            << "queue size:" << pwm.queue.size() << std::endl;
+        std::cout << "queue sum:" << pwm.sum.first << " " << pwm.sum.second << std::endl;
+        std::cout << "queue average:" << pwm.average.first << " " << pwm.average.second << std::endl;
+        std::queue<std::pair<uint32_t, uint32_t>> q_copy = pwm.queue;
+        while (!q_copy.empty())
+        {
+            std::cout << q_copy.front().first << " " << q_copy.front().second << std::endl;
+            q_copy.pop();
+        }
+    }
 }
