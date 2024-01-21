@@ -27,6 +27,11 @@ struct laser_pointing
     double last_time;
     double next_time;
 };
+enum class pd_arrangement
+{
+    circle,
+    square,
+};
 enum class tracking_method
 {
     one_max_value,
@@ -49,10 +54,13 @@ struct Record
     double sum_distance;
     double average_distance;
     std::set<double> tag_intensity;
+    std::set<double> tag_SNR;
+    double sum_SNR;
+    double average_SNR;
     double sum_intensity;
     double average_intensity;
     uint64_t record_number;
-    Record() : average_distance(0), average_intensity(0), record_number(0), sum_distance(0), sum_intensity(0) {}
+    Record() : average_distance(0), average_intensity(0), record_number(0), sum_distance(0), sum_intensity(0), sum_SNR(0), average_SNR(0) {}
 };
 class Simulator
 {
@@ -64,6 +72,7 @@ private:
     Eigen::Vector3d laser_position;
     laser_pointing laser;
     tracking_method method;
+    pd_arrangement arrangement;
     pwm_queue pwm;
     double time_step;
     double fov;
@@ -111,6 +120,7 @@ public:
     void manage_pwm_queue();
     Eigen::Vector2d find_center();
     Eigen::Vector3d get_laser_orientation();
+    double test_object_distance();
     void run();
 };
 #endif

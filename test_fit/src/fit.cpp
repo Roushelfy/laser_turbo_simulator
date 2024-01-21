@@ -2,6 +2,8 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <cmath>
+#include <random>
 uint32_t pd_number;
 struct pd
 {
@@ -52,17 +54,27 @@ Eigen::Vector2d find_center()
     VectorXd Atzfit = At * zfitVec;
 
     // Solve the linear system (AtA) * aa = Atzfit
-    MatrixXd AtA_inv = AtA.completeOrthogonalDecomposition().pseudoInverse();
-    // print AtA_inv
-    // std::cout << "AtA_inv = \n"
-    //           << AtA_inv << std::endl;
+    VectorXd aa = AtA.colPivHouseholderQr().solve(Atzfit);
+    // MatrixXd AtA_inv = AtA.completeOrthogonalDecomposition().pseudoInverse();
+    // MatrixXd AtA_inv = AtA.inverse();
+    //  print AtA_inv
+    //  std::cout << "AtA_inv = \n"
+    //            << AtA_inv << std::endl;
 
-    VectorXd aa = AtA_inv * Atzfit;
+    // VectorXd aa = AtA
+    //  VectorXd aa = AtA_inv * Atzfit;
 
     // Calculate x0 and y0
     double x0 = -aa(2) / (2 * aa(0));
     double y0 = -aa(3) / (2 * aa(1));
 
+    // print MLE
+    double sum_MLE = 0;
+    // std::cout << "MLE = ";
+    for (int i = 0; i < pd_number; ++i)
+    {
+    }
+    // std::cout << sum_MLE << std::endl;
     return Eigen::Vector2d(x0, y0);
 }
 
@@ -76,8 +88,59 @@ void generate_pd_data()
         pd_temp.position(1) = pd_radius * std::sin(2 * M_PI * i / pd_number);
         pd_temp.value = pd_max_value * std::exp(-(pd_temp.position(0) - x_0) * (pd_temp.position(0) - x_0) / (2 * sigma_x * sigma_x) - (pd_temp.position(1) - y_0) * (pd_temp.position(1) - y_0) / (2 * sigma_y * sigma_y));
         // add noise
-        pd_temp.value += rand() % 100 - 50;
+        // pd_temp.value += rand() % 100 - 50;
         pd_array.push_back(pd_temp);
+    }
+
+    // print pd value
+    for (int i = 0; i < pd_number; ++i)
+    {
+        std::cout << pd_array[i].value << std::endl;
+    }
+}
+double noise(double stddev)
+{
+    static std::mt19937 generator(std::random_device{}());
+    std::normal_distribution<double> dist(0, stddev);
+    return dist(generator);
+}
+void generate_another_pd_data()
+{
+    // genarate pd data around a square (n/4 on each side)
+    for (int i = 0; i < pd_number; ++i)
+    {
+        pd pd_temp;
+        if (i < pd_number / 4)
+        {
+            pd_temp.position(0) = pd_radius;
+            pd_temp.position(1) = -pd_radius + 2 * pd_radius * i / (pd_number / 4);
+        }
+        else if (i < pd_number / 2)
+        {
+            pd_temp.position(0) = pd_radius - 2 * pd_radius * (i - pd_number / 4) / (pd_number / 4);
+            pd_temp.position(1) = pd_radius;
+        }
+        else if (i < 3 * pd_number / 4)
+        {
+            pd_temp.position(0) = -pd_radius;
+            pd_temp.position(1) = pd_radius - 2 * pd_radius * (i - pd_number / 2) / (pd_number / 4);
+        }
+        else
+        {
+            pd_temp.position(0) = -pd_radius + 2 * pd_radius * (i - 3 * pd_number / 4) / (pd_number / 4);
+            pd_temp.position(1) = -pd_radius;
+        }
+        pd_temp.value = pd_max_value * std::exp(-(pd_temp.position(0) - x_0) * (pd_temp.position(0) - x_0) / (2 * sigma_x * sigma_x) - (pd_temp.position(1) - y_0) * (pd_temp.position(1) - y_0) / (2 * sigma_y * sigma_y));
+        // add noise
+        pd_temp.value += noise(0.001 * pd_max_value);
+        pd_array.push_back(pd_temp);
+    }
+
+    // print pd value and position
+    for (int i = 0; i < pd_number; ++i)
+    {
+        std::cout << pd_array[i].value << std::endl;
+        std::cout << pd_array[i].position.transpose() << std::endl;
     }
 }
 int main()
@@ -96,7 +159,8 @@ int main()
     std::cout << x_0 << ' ' << y_0 << ' ' << sigma_x << ' ' << sigma_y << std::endl;
     pd_file >> pd_max_value;
     std::cout << pd_max_value << std::endl;
-    generate_pd_data();
+    generate_another_pd_data();
+    // generate_pd_data();
     pd_file.close();
     std::cout << "Center: (" << find_center().transpose() << ")" << std::endl;
 }
