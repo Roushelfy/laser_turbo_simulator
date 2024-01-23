@@ -1,0 +1,16 @@
+Kp: 0.42 Kd: 0.70 Success: 3 Time: 153.948412843
+Kp: 0.47 Kd: 0.70 Success: 3 Time: 157.723457712
+Kp: 0.43 Kd: 0.70 Success: 3 Time: 167.635401046
+Kp: 0.40 Kd: 0.70 Success: 4 Time: 170.217976468
+Kp: 0.45 Kd: 0.70 Success: 1 Time: 119.118204259
+Kp: 0.45 Kd: 0.70 Success: 5 Time: 193.173806818
+Kp: 0.40 Kd: 0.70 Success: 3 Time: 126.039040732
+Kp: 0.46 Kd: 0.70 Success: 5 Time: 193.174032150
+Kp: 0.41 Kd: 0.70 Success: 5 Time: 193.174523055
+Kp: 0.44 Kd: 0.70 Success: 4 Time: 193.174154497
+Kp: 0.41 Kd: 0.70 Success: 2 Time: 126.038277810
+Kp: 0.44 Kd: 0.70 Success: 4 Time: 127.184148049
+Kp: 0.42 Kd: 0.70 Success: 4 Time: 127.184773628
+Kp: 0.47 Kd: 0.70 Success: 4 Time: 127.184379337
+Kp: 0.43 Kd: 0.70 Success: 4 Time: 127.185056093
+Kp: 0.46 Kd: 0.70 Success: 4 Time: 127.184636359

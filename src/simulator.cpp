@@ -3,7 +3,7 @@
 #include <fstream>
 #include <filesystem>
 #include <random>
-Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) : simulate_time(0), pwm()
+Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) : simulate_time(0), pwm(), laser(), pid(), record()
 {
     // read params from config file
     std::ifstream configFile(configFilePath);
@@ -27,9 +27,7 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
         {
             std::string value;
             std::getline(iss, value);
-            if (key == "time_step")
-                time_step = std::stod(value);
-            else if (key == "adc_frequency")
+            if (key == "adc_frequency")
                 adc_frequency = std::stod(value);
             else if (key == "galvo_delay")
                 galvo_delay = std::stod(value);
@@ -93,8 +91,8 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
                     method = tracking_method::n_max_value;
                 else if (value == "move_in_four")
                     method = tracking_method::move_in_four;
-                else if (value == "fitting_glass")
-                    method = tracking_method::fitting_galss;
+                else if (value == "fitting_gaussian")
+                    method = tracking_method::fitting_gaussian;
                 else
                     std::cout << "Tracking method not supported!" << std::endl;
             }
@@ -104,6 +102,8 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
                     arrangement = pd_arrangement::square;
                 else if (value == "circle")
                     arrangement = pd_arrangement::circle;
+                else if (value == "cross")
+                    arrangement = pd_arrangement::cross;
                 else
                     std::cout << "PD arrangement not supported!" << std::endl;
             }
@@ -111,15 +111,43 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
             {
                 object_radius = std::stod(value);
             }
+            else if (key == "kp")
+            {
+                pid.kp = std::stod(value);
+            }
+            else if (key == "ki")
+            {
+                pid.ki = std::stod(value);
+            }
+            else if (key == "kd")
+            {
+                pid.kd = std::stod(value);
+            }
+            else if (key == "threshold")
+            {
+                pid.threshold = std::stod(value);
+            }
+            else if (key == "use_pid")
+            {
+                if (value == "true")
+                    use_pid = true;
+                else
+                    use_pid = false;
+            }
+            else if (key == "use_log")
+            {
+                if (value == "true")
+                    use_log = true;
+                else
+                    use_log = false;
+            }
             else
                 std::cout << "Key not supported!" << key << std::endl;
         }
     }
     for (auto &pair : config)
     {
-        if (pair.first == "time_step")
-            time_step = std::stod(pair.second);
-        else if (pair.first == "adc_frequency")
+        if (pair.first == "adc_frequency")
             adc_frequency = std::stod(pair.second);
         else if (pair.first == "galvo_delay")
             galvo_delay = std::stod(pair.second);
@@ -175,6 +203,36 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
             else
                 debug = false;
         }
+        else if (pair.first == "kp")
+        {
+            pid.kp = std::stod(pair.second);
+        }
+        else if (pair.first == "ki")
+        {
+            pid.ki = std::stod(pair.second);
+        }
+        else if (pair.first == "kd")
+        {
+            pid.kd = std::stod(pair.second);
+        }
+        else if (pair.first == "threshold")
+        {
+            pid.threshold = std::stod(pair.second);
+        }
+        else if (pair.first == "use_pid")
+        {
+            if (pair.second == "true")
+                use_pid = true;
+            else
+                use_pid = false;
+        }
+        else if (pair.first == "use_log")
+        {
+            if (pair.second == "true")
+                use_log = true;
+            else
+                use_log = false;
+        }
         else if (pair.first == "tracking_method")
         {
             if (pair.second == "one_max_value")
@@ -183,8 +241,8 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
                 method = tracking_method::n_max_value;
             else if (pair.second == "move_in_four")
                 method = tracking_method::move_in_four;
-            else if (pair.second == "fitting_glass")
-                method = tracking_method::fitting_galss;
+            else if (pair.second == "fitting_gaussian")
+                method = tracking_method::fitting_gaussian;
             else
                 std::cout << "Tracking method not supported!" << std::endl;
         }
@@ -194,6 +252,8 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
                 arrangement = pd_arrangement::square;
             else if (pair.second == "circle")
                 arrangement = pd_arrangement::circle;
+            else if (pair.second == "cross")
+                arrangement = pd_arrangement::cross;
             else
                 std::cout << "PD arrangement not supported!" << std::endl;
         }
@@ -212,6 +272,7 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
     update_tag_position(0);
     laser.last_orientation = laser.target_orientation = (tag_position - laser_position).normalized();
     laser.last_time = laser.next_time = simulate_time;
+
     // set voltage based on orientation
     set_galvo_voltage();
 
@@ -253,6 +314,28 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
                 std::cout << pd_array[i].position.transpose() << std::endl;
             }
     }
+    else if (arrangement == pd_arrangement::cross)
+    {
+        double dr = pd_radius / (pd_number / 4);
+        double r = dr;
+        for (int i = 0; i < pd_number / 4; ++i)
+        {
+            pd pd_temp;
+            pd_temp.position(0) = r;
+            pd_temp.position(1) = 0;
+            pd_temp.position(2) = 0;
+            pd_temp.value = 0;
+            pd_array.push_back(pd_temp);
+            pd_temp.position(0) = -r;
+            pd_array.push_back(pd_temp);
+            pd_temp.position(0) = 0;
+            pd_temp.position(1) = r;
+            pd_array.push_back(pd_temp);
+            pd_temp.position(1) = -r;
+            pd_array.push_back(pd_temp);
+            r += dr;
+        }
+    }
     else if (arrangement == pd_arrangement::circle)
     {
         for (int i = 0; i < pd_number; i++)
@@ -276,7 +359,6 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
             << "laser_orientation" << get_laser_orientation() << std::endl;
         std::cout << "tag_position" << tag_position.transpose() << std::endl;
         std::cout << "init dis" << distanceToLine(tag_position, laser_position, get_laser_orientation()) << std::endl;
-        std::cout << "Time step: " << time_step << std::endl;
         std::cout << "ADC frequency: " << adc_frequency << std::endl;
         std::cout << "ADC time step: " << adc_time_step << std::endl;
         std::cout << "Galvo delay: " << galvo_delay << std::endl;
@@ -298,6 +380,14 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
         std::cout << "Galvo angular speed: " << galvo_angular_speed << std::endl;
         std::cout << "DAC resolution: " << dac_resolution << std::endl;
         std::cout << "Long time: " << long_time << std::endl;
+        std::cout << "Debug: " << debug << std::endl;
+        std::cout << "use_log: " << use_log << std::endl;
+        std::cout << "Use PID: " << use_pid << std::endl;
+
+        std::cout << "PID kp: " << pid.kp << std::endl;
+        std::cout << "PID ki: " << pid.ki << std::endl;
+        std::cout << "PID kd: " << pid.kd << std::endl;
+        std::cout << "PID threshold: " << pid.threshold << std::endl;
         std::cout << "Tracking method: ";
         switch (method)
         {
@@ -310,8 +400,8 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
         case tracking_method::move_in_four:
             std::cout << "move_in_four" << std::endl;
             break;
-        case tracking_method::fitting_galss:
-            std::cout << "fitting_glass" << std::endl;
+        case tracking_method::fitting_gaussian:
+            std::cout << "fitting_gaussian" << std::endl;
             break;
         default:
             break;
@@ -324,6 +414,9 @@ Simulator::Simulator(const std::string &configFilePath, int argc, char *argv[]) 
             break;
         case pd_arrangement::circle:
             std::cout << "circle" << std::endl;
+            break;
+        case pd_arrangement::cross:
+            std::cout << "cross" << std::endl;
             break;
         default:
             break;
@@ -358,99 +451,103 @@ void Simulator::run()
             }
             if (!long_time && simulate_time * object_angular_speed > 2 * M_PI)
             {
-                // std::cout << "Tracking success!" << std::endl;
-                //  save record
-                // save all record data to files
-                std::string datapath = "../data/";
-                std::string distance = "dis_" + std::to_string((int)object_distance) + "/";
-                std::string speed = "speed_" + std::to_string((int)object_speed);
-                std::string filename_prefix = datapath + distance + speed;
-                std::filesystem::path path(filename_prefix);
-                if (!std::filesystem::exists(path))
+                if (use_log)
                 {
-                    // create
-                    std::filesystem::create_directories(path);
+                    // std::cout << "Tracking success!" << std::endl;
+                    //  save record
+                    // save all record data to files
+                    std::string datapath = "../data/";
+                    std::string distance = "dis_" + std::to_string((int)object_distance) + "/";
+                    std::string speed = "speed_" + std::to_string((int)object_speed);
+                    std::string filename_prefix = datapath + distance + speed;
+                    std::filesystem::path path(filename_prefix);
+                    if (!std::filesystem::exists(path))
+                    {
+                        // create
+                        std::filesystem::create_directories(path);
+                    }
+
+                    std::string offsetfile = filename_prefix + "/offset.txt";
+                    std::string snrfile = filename_prefix + "/snr.txt";
+                    std::string recordfile = filename_prefix + "/record.txt";
+                    std::ofstream recordFile(recordfile);
+                    std::ofstream offsetFile(offsetfile);
+                    std::ofstream snrFile(snrfile);
+                    recordFile << "average_offset:" << record.average_distance << std::endl;
+                    recordFile << "average_intensity:" << record.average_intensity << std::endl;
+                    recordFile << "record_number:" << record.record_number << std::endl;
+                    recordFile << "laser_offset:" << std::endl;
+                    // 从最大值，最小值之间划分n个区间，统计次数
+                    double max_dis = *record.laser_distance.rbegin();
+                    double min_dis = *record.laser_distance.begin();
+                    int plot_num = 100;
+                    double interval = (max_dis - min_dis) / plot_num;
+                    std::vector<int> count(plot_num, 0);
+                    for (auto &dis : record.laser_distance)
+                    {
+                        int index = (dis - min_dis) / interval;
+                        count[index]++;
+                        offsetFile << dis << std::endl;
+                    }
+                    // sum all counts
+                    int sum = 0;
+                    for (auto &c : count)
+                    {
+                        sum += c;
+                    }
+                    for (int i = 0; i < plot_num; i++)
+                    {
+                        recordFile << min_dis + interval * i << ":" << count[i] / (double)sum << std::endl;
+                    }
+                    recordFile << "tag_intensity:" << std::endl;
+                    double max_intensity = *record.tag_intensity.rbegin();
+                    double min_intensity = *record.tag_intensity.begin();
+                    double intensity_interval = (max_intensity - min_intensity) / plot_num;
+                    std::vector<int> intensity_count(plot_num, 0);
+                    for (auto &intensity : record.tag_intensity)
+                    {
+                        int index = (intensity - min_intensity) / intensity_interval;
+                        intensity_count[index]++;
+                    }
+                    // sum all counts
+                    sum = 0;
+                    for (auto &c : intensity_count)
+                    {
+                        sum += c;
+                    }
+                    for (int i = 0; i < plot_num; i++)
+                    {
+                        recordFile << min_intensity + intensity_interval * i << ":" << intensity_count[i] / (double)sum << std::endl;
+                    }
+                    recordFile << "tag_SNR:" << std::endl;
+                    double max_SNR = *record.tag_SNR.rbegin();
+                    double min_SNR = *record.tag_SNR.begin();
+                    double snr_interval = (max_SNR - min_SNR) / plot_num;
+                    std::vector<int> snr_count(plot_num, 0);
+                    for (auto &snr : record.tag_SNR)
+                    {
+                        int index = (snr - min_SNR) / snr_interval;
+                        snr_count[index]++;
+                        snrFile << snr << std::endl;
+                    }
+                    // sum all counts
+                    sum = 0;
+                    for (auto &c : snr_count)
+                    {
+                        sum += c;
+                    }
+                    for (int i = 0; i < plot_num; i++)
+                    {
+                        recordFile << min_SNR + snr_interval * i << ":" << snr_count[i] / (double)sum << std::endl;
+                    }
+                    std::cout << "object_speed:" << object_speed << ' ';
+                    std::cout << "average_offset:" << record.average_distance << ' ';
+                    std::cout << "average_intensity:" << record.average_intensity << std::endl;
+                    recordFile.close();
+                    offsetFile.close();
+                    snrFile.close();
                 }
 
-                std::string offsetfile = filename_prefix + "/offset.txt";
-                std::string snrfile = filename_prefix + "/snr.txt";
-                std::string recordfile = filename_prefix + "/record.txt";
-                std::ofstream recordFile(recordfile);
-                std::ofstream offsetFile(offsetfile);
-                std::ofstream snrFile(snrfile);
-                recordFile << "average_offset:" << record.average_distance << std::endl;
-                recordFile << "average_intensity:" << record.average_intensity << std::endl;
-                std::cout << "object_speed:" << object_speed << ' ';
-                std::cout << "average_offset:" << record.average_distance << ' ';
-                std::cout << "average_intensity:" << record.average_intensity << std::endl;
-                recordFile << "record_number:" << record.record_number << std::endl;
-                recordFile << "laser_offset:" << std::endl;
-                // 从最大值，最小值之间划分n个区间，统计次数
-                double max_dis = *record.laser_distance.rbegin();
-                double min_dis = *record.laser_distance.begin();
-                int plot_num = 100;
-                double interval = (max_dis - min_dis) / plot_num;
-                std::vector<int> count(plot_num, 0);
-                for (auto &dis : record.laser_distance)
-                {
-                    int index = (dis - min_dis) / interval;
-                    count[index]++;
-                    offsetFile << dis << std::endl;
-                }
-                // sum all counts
-                int sum = 0;
-                for (auto &c : count)
-                {
-                    sum += c;
-                }
-                for (int i = 0; i < plot_num; i++)
-                {
-                    recordFile << min_dis + interval * i << ":" << count[i] / (double)sum << std::endl;
-                }
-                recordFile << "tag_intensity:" << std::endl;
-                double max_intensity = *record.tag_intensity.rbegin();
-                double min_intensity = *record.tag_intensity.begin();
-                double intensity_interval = (max_intensity - min_intensity) / plot_num;
-                std::vector<int> intensity_count(plot_num, 0);
-                for (auto &intensity : record.tag_intensity)
-                {
-                    int index = (intensity - min_intensity) / intensity_interval;
-                    intensity_count[index]++;
-                }
-                // sum all counts
-                sum = 0;
-                for (auto &c : intensity_count)
-                {
-                    sum += c;
-                }
-                for (int i = 0; i < plot_num; i++)
-                {
-                    recordFile << min_intensity + intensity_interval * i << ":" << intensity_count[i] / (double)sum << std::endl;
-                }
-                recordFile << "tag_SNR:" << std::endl;
-                double max_SNR = *record.tag_SNR.rbegin();
-                double min_SNR = *record.tag_SNR.begin();
-                double snr_interval = (max_SNR - min_SNR) / plot_num;
-                std::vector<int> snr_count(plot_num, 0);
-                for (auto &snr : record.tag_SNR)
-                {
-                    int index = (snr - min_SNR) / snr_interval;
-                    snr_count[index]++;
-                    snrFile << snr << std::endl;
-                }
-                // sum all counts
-                sum = 0;
-                for (auto &c : snr_count)
-                {
-                    sum += c;
-                }
-                for (int i = 0; i < plot_num; i++)
-                {
-                    recordFile << min_SNR + snr_interval * i << ":" << snr_count[i] / (double)sum << std::endl;
-                }
-                recordFile.close();
-                offsetFile.close();
-                snrFile.close();
                 break;
             }
         }
@@ -493,7 +590,7 @@ double Simulator::gaussianBeamIntensity(const Eigen::Vector3d &dest,
     double distance = (dest - start).norm();
     double r = distanceToLine(dest, start, orientation);
     double w = waist_radius * std::sqrt(1 + std::pow((distance - waist_distance) / (M_PI * std::pow(waist_radius, 2) / wavelength), 2));
-    double intensity = std::exp(-2 * std::pow(r, 2) / std::pow(w, 2)) * central_intensity * waist_radius / w;
+    double intensity = std::exp(-2 * std::pow(r, 2) / std::pow(w, 2)) * central_intensity * waist_radius * waist_radius / w / w;
     return intensity;
 }
 
@@ -525,9 +622,12 @@ void Simulator::set_galvo_voltage()
     laser.galvo_avg_voltage_y = (laser.target_orientation(1) / fov) * dac_resolution / 2 + dac_resolution / 2;
     laser.galvo_voltage_x = round(laser.galvo_avg_voltage_x);
     laser.galvo_voltage_y = round(laser.galvo_avg_voltage_y);
+    laser.last_galvo_voltage_x = laser.galvo_voltage_x;
+    laser.last_galvo_voltage_y = laser.galvo_voltage_y;
 }
 void Simulator::adjust_laser_orientation()
 {
+    Eigen::Vector2d center;
     switch (method)
     {
     case tracking_method::one_max_value:
@@ -597,13 +697,57 @@ void Simulator::adjust_laser_orientation()
             std::cout << "galvo_avg_voltage_x:" << laser.galvo_avg_voltage_x << std::endl;
             std::cout << "galvo_avg_voltage_y:" << laser.galvo_avg_voltage_y << std::endl;
         }
+        manage_pwm_queue();
         break;
     }
-    case tracking_method::fitting_galss:
+    case tracking_method::fitting_gaussian:
+        center = find_center();
+        if (debug == true)
+        {
+            std::cout << "center:" << center.transpose() << std::endl;
+        }
+        if (use_pid)
+        {
+            auto update_voltage = pid.update(center);
+            laser.galvo_voltage_x += update_voltage.first;
+            laser.galvo_voltage_y += update_voltage.second;
+        }
+        else
+        {
+            if (center(0) > 0)
+            {
+                if (laser.last_center(0) <= center(0))
+                {
+                    laser.galvo_voltage_x += 1;
+                }
+            }
+            else if (center(0) < 0)
+            {
+                if (laser.last_center(0) >= center(0))
+                {
+                    laser.galvo_voltage_x -= 1;
+                }
+            }
+            if (center(1) > 0)
+            {
+                if (laser.last_center(1) <= center(1))
+                {
+                    laser.galvo_voltage_y += 1;
+                }
+            }
+            else if (center(1) < 0)
+            {
+                if (laser.last_center(1) >= center(1))
+                {
+                    laser.galvo_voltage_y -= 1;
+                }
+            }
+            laser.last_center = center;
+        }
+        break;
     default:
         break;
     }
-    manage_pwm_queue();
     // limit voltage
     if (laser.galvo_voltage_x > dac_resolution)
         laser.galvo_voltage_x = dac_resolution;
@@ -664,8 +808,6 @@ Eigen::Vector3d Simulator::get_laser_orientation()
         double ratio = time / (laser.next_time - laser.last_time);
         res = laser.last_orientation + (laser.target_orientation - laser.last_orientation) * ratio;
     }
-    if (debug == true)
-        std::cout << "laser_orientation:" << res.transpose() << std::endl;
     return res;
 }
 bool Simulator::connection_lost()
@@ -673,18 +815,20 @@ bool Simulator::connection_lost()
     double dis = distanceToLine(tag_position, laser_position, get_laser_orientation());
     double intensity = gaussianBeamIntensity(tag_position, laser_position, get_laser_orientation());
     // record
-    record.record_number++;
-    record.laser_distance.insert(dis);
-    record.sum_distance += dis;
-    record.average_distance = record.sum_distance / record.record_number;
-    record.tag_intensity.insert(intensity);
-    record.sum_intensity += intensity;
-    record.average_intensity = record.sum_intensity / record.record_number;
-    double snr = 10 * log10(intensity / background_intensity);
-    record.tag_SNR.insert(snr);
-    record.sum_SNR += snr;
-    record.average_SNR = record.sum_SNR / record.record_number;
-
+    if (use_log)
+    {
+        record.record_number++;
+        record.laser_distance.insert(dis);
+        record.sum_distance += dis;
+        record.average_distance = record.sum_distance / record.record_number;
+        record.tag_intensity.insert(intensity);
+        record.sum_intensity += intensity;
+        record.average_intensity = record.sum_intensity / record.record_number;
+        double snr = 10 * log10(intensity / background_intensity);
+        record.tag_SNR.insert(snr);
+        record.sum_SNR += snr;
+        record.average_SNR = record.sum_SNR / record.record_number;
+    }
     if (dis > object_radius)
     {
         std::cout << "Connection lost! dis:" << dis << std::endl;
@@ -702,36 +846,55 @@ Eigen::Vector2d Simulator::find_center()
     using Eigen::VectorXd;
 
     // Define matrix A
-    MatrixXd A(pd_number, 5);
-    for (int i = 0; i < pd_number; ++i)
+    static MatrixXd A(pd_number, 3);
+    static MatrixXd At;
+    static MatrixXd AtA;
+    static MatrixXd AtA_inv;
+    // only calculate once
+    if (AtA_inv.size() == 0)
     {
-        A(i, 0) = pd_array[i].position(0) * pd_array[i].position(0);
-        A(i, 1) = pd_array[i].position(1) * pd_array[i].position(1);
-        A(i, 2) = pd_array[i].position(0);
-        A(i, 3) = pd_array[i].position(1);
-        A(i, 4) = 1.0;
+        for (int i = 0; i < pd_number; ++i)
+        {
+            A(i, 0) = pd_array[i].position(0);
+            A(i, 1) = pd_array[i].position(1);
+            A(i, 2) = 1.0;
+        }
+
+        // Compute transpose of A and A' * A
+        At = A.transpose();
+        AtA = At * A;
+        AtA_inv = AtA.inverse();
     }
-
-    // Compute transpose of A and A' * A
-    MatrixXd At = A.transpose();
-    MatrixXd AtA = At * A;
-
     // Prepare vector zfitVec
     VectorXd zfitVec(pd_number);
     for (int i = 0; i < pd_number; ++i)
     {
-        zfitVec(i) = log(pd_array[i].value);
+        zfitVec(i) = log(std::max(pd_array[i].value, 1));
     }
 
     // Calculate A' * zfitVec
     VectorXd Atzfit = At * zfitVec;
 
+    if (debug)
+    {
+        std::cout << "A:" << std::endl;
+        std::cout << A << std::endl;
+        std::cout << "At:" << std::endl;
+        std::cout << At << std::endl;
+        std::cout << "AtA:" << std::endl;
+        std::cout << AtA << std::endl;
+        std::cout << "zfitVec:" << std::endl;
+        std::cout << zfitVec << std::endl;
+        std::cout << "Atzfit:" << std::endl;
+        std::cout << Atzfit << std::endl;
+    }
+
     // Solve the linear system (AtA) * aa = Atzfit
-    VectorXd aa = AtA.ldlt().solve(Atzfit);
+    VectorXd aa = AtA_inv * Atzfit;
 
     // Calculate x0 and y0
-    double x0 = -aa(2) / (2 * aa(0));
-    double y0 = -aa(3) / (2 * aa(1));
+    double x0 = aa(0);
+    double y0 = aa(1);
 
     // Print the center
     if (debug == true)
@@ -762,49 +925,67 @@ void Simulator::manage_pwm_queue()
     pwm.average.second = (double)pwm.sum.second / pwm.queue.size();
     laser.galvo_voltage_x = pwm_pair.first;
     laser.galvo_voltage_y = pwm_pair.second;
-    // debug queue
-    if (debug == true)
-    {
-        std::cout
-            << "queue size:" << pwm.queue.size() << std::endl;
-        std::cout << "queue sum:" << pwm.sum.first << " " << pwm.sum.second << std::endl;
-        std::cout << "queue average:" << pwm.average.first << " " << pwm.average.second << std::endl;
-        std::queue<std::pair<uint32_t, uint32_t>> q_copy = pwm.queue;
-        while (!q_copy.empty())
-        {
-            std::cout << q_copy.front().first << " " << q_copy.front().second << std::endl;
-            q_copy.pop();
-        }
-    }
 }
 double Simulator::test_object_distance()
 {
     double sum_dis = 0;
+    int test_number = 100;
     object_angular_speed = 0;
+    object_moving_radius = 0;
+    laser.galvo_voltage_x = laser.galvo_voltage_y = dac_resolution / 2;
     double delta_angle = 2 * fov / dac_resolution;
     set_laser_orientation();
     update_tag_position(1);
     sample_pd();
     Eigen::Vector2d last_center = find_center();
-    for (int i = 0; i < 100; i++)
+    for (int i = 0; i < test_number; i++)
     {
         if (i % 4 == 0)
             laser.galvo_voltage_x += 1;
         else if (i % 4 == 1)
-            laser.galvo_voltage_y += 1;
-        else if (i % 4 == 2)
             laser.galvo_voltage_x -= 1;
+        else if (i % 4 == 2)
+            laser.galvo_voltage_y += 1;
         else
             laser.galvo_voltage_y -= 1;
         set_laser_orientation();
         update_tag_position(1);
         sample_pd();
         Eigen::Vector2d center = find_center();
-        sum_dis += (center - last_center).norm() / delta_angle;
+        sum_dis += (center - last_center).norm() / tan(delta_angle);
         last_center = center;
     }
-    double average_dis = sum_dis / 100 / 2;
-    std::cout << "actual dis:" << object_distance << std::endl;
-    std::cout << "tested average_dis:" << average_dis << std::endl;
+    double average_dis = sum_dis / test_number / 2;
+    if (debug)
+    {
+        std::cout << "actual dis:" << object_distance << std::endl;
+        std::cout << "tested average_dis:" << average_dis << std::endl;
+        std::cout << "error " << (average_dis - object_distance) / object_distance * 100 << "%" << std::endl;
+    }
     return average_dis;
+}
+
+void Simulator::test_dis_performance()
+{
+    int run_time = 1000;
+    // run multiple times and measure stddev
+    std::vector<double> dis;
+    for (int i = 0; i < run_time; i++)
+    {
+        dis.push_back(test_object_distance());
+    }
+    double sum = 0;
+    for (auto &d : dis)
+    {
+        sum += d;
+    }
+    double average = sum / run_time;
+    double stddev = 0;
+    for (auto &d : dis)
+    {
+        stddev += (d - average) * (d - average);
+    }
+    stddev = std::sqrt(stddev / run_time);
+    std::cout << "average:" << average << std::endl;
+    std::cout << "stddev:" << stddev << std::endl;
 }

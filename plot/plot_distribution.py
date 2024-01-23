@@ -34,8 +34,8 @@ def main():
         file.seek(0)
         intensity_data = read_section(file, 'tag_intensity:','')
 
-    plot_data(distance_data, 'Laser Offset Distribution', 'laser_offset_distribution.png')
-    plot_data(intensity_data, 'Tag Intensity Distribution', 'tag_intensity_distribution.png')
+    plot_data(distance_data, 'Laser Offset Distribution', 'laser_offset_distribution.pdf')
+    plot_data(intensity_data, 'Tag Intensity Distribution', 'tag_intensity_distribution.pdf')
 
 if __name__ == '__main__':
     main()

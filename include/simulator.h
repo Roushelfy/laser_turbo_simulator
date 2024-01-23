@@ -22,22 +22,54 @@ struct laser_pointing
     Eigen::Vector3d target_orientation;
     uint32_t galvo_voltage_x;
     uint32_t galvo_voltage_y;
+    uint32_t last_galvo_voltage_x;
+    uint32_t last_galvo_voltage_y;
+    Eigen::Vector2d last_center;
     double galvo_avg_voltage_x;
     double galvo_avg_voltage_y;
     double last_time;
     double next_time;
 };
+struct PID
+{
+    double kp;
+    double ki;
+    double kd;
+    double threshold;
+    Eigen::Vector2d last_error;
+    Eigen::Vector2d sum_error;
+    PID(double kp = 0, double ki = 0, double kd = 0) : kp(kp), ki(ki), kd(kd), last_error(), sum_error(), threshold(0) {}
+    std::pair<int, int> update(const Eigen::Vector2d &error)
+    {
+        sum_error += error;
+        Eigen::Vector2d delta_error = error - last_error;
+        last_error = error;
+        double delta_voltage_x = kp * error(0) + ki * sum_error(0) + kd * delta_error(0);
+        double delta_voltage_y = kp * error(1) + ki * sum_error(1) + kd * delta_error(1);
+        std::pair<int, int> delta_voltage = {0, 0};
+        if (delta_voltage_x >= threshold)
+            delta_voltage.first = 1;
+        else if (delta_voltage_x <= -threshold)
+            delta_voltage.first = -1;
+        if (delta_voltage_y >= threshold)
+            delta_voltage.second = 1;
+        else if (delta_voltage_y <= -threshold)
+            delta_voltage.second = -1;
+        return delta_voltage;
+    }
+};
 enum class pd_arrangement
 {
     circle,
     square,
+    cross,
 };
 enum class tracking_method
 {
     one_max_value,
     n_max_value,
     move_in_four,
-    fitting_galss,
+    fitting_gaussian,
 };
 struct pwm_queue
 {
@@ -73,8 +105,8 @@ private:
     laser_pointing laser;
     tracking_method method;
     pd_arrangement arrangement;
+    PID pid;
     pwm_queue pwm;
-    double time_step;
     double fov;
     double adc_frequency;  // 1/adc_frequency = adc time step
     double adc_time_step;  // sampling time between two adc
@@ -94,6 +126,8 @@ private:
     double object_radius;
     double galvo_angular_speed;
     bool debug;
+    bool use_log;
+    bool use_pid;
     uint32_t dac_resolution;
     Record record;
     bool long_time;
@@ -122,5 +156,6 @@ public:
     Eigen::Vector3d get_laser_orientation();
     double test_object_distance();
     void run();
+    void test_dis_performance();
 };
 #endif
